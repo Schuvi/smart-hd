@@ -1,11 +1,12 @@
 'use client';
 
-import React, {useCallback, useEffect, useState} from 'react';
+import React, {Suspense, useCallback, useEffect, useState} from 'react';
 import {useSearchParams} from 'next/navigation';
 import {createClient} from '@/lib/supabase/client';
 import {AlertCircle, CheckCircle2, Loader2, Printer} from 'lucide-react';
 
-export default function SesiHDWorkflowPage() {
+// 1. Ubah nama fungsi utama menjadi komponen konten (bukan default export)
+function SesiHDWorkflowContent() {
     const searchParams = useSearchParams();
     const sessionId = searchParams.get('id');
     const supabase = createClient();
@@ -44,7 +45,6 @@ export default function SesiHDWorkflowPage() {
         }
         setPageLoading(true);
 
-        // 1. Ambil Sesi Saat Ini
         const {data: sessionData, error: sessionError} = await supabase
             .from('hd_sessions')
             .select('*')
@@ -54,7 +54,6 @@ export default function SesiHDWorkflowPage() {
         if (sessionData && !sessionError) {
             setSession(sessionData);
 
-            // 2. Ambil Profil Pasien
             const {data: patientData} = await supabase
                 .from('patients')
                 .select('*')
@@ -63,7 +62,6 @@ export default function SesiHDWorkflowPage() {
 
             if (patientData) setPatient(patientData);
 
-            // 3. Cari BB Post-HD sesi sebelumnya untuk perbandingan
             const {data: pastSessions} = await supabase
                 .from('hd_sessions')
                 .select('post_hd')
@@ -107,7 +105,6 @@ export default function SesiHDWorkflowPage() {
                 setBleeding(session.post_hd.bleeding || false);
                 setPostNotes(session.post_hd.notes || '');
             }
-            // Langsung set tab ke Post jika bukan Terjadwal atau Pre-HD
             if (session.status === 'Pre-HD' || session.status === 'Terjadwal') {
                 setActiveTab('Pre');
             } else {
@@ -132,7 +129,6 @@ export default function SesiHDWorkflowPage() {
         );
     }
 
-    // Kalkulasi Diff BB untuk Visualisasi
     const preWeightNum = parseFloat(preWeight);
     const diffDry = !isNaN(preWeightNum) && patient?.dry_weight ? (preWeightNum - patient.dry_weight) : null;
     const diffLast = !isNaN(preWeightNum) && lastPostWeight ? (preWeightNum - lastPostWeight) : null;
@@ -141,7 +137,7 @@ export default function SesiHDWorkflowPage() {
         setPreWeight(val);
         const w = parseFloat(val);
         if (patient?.dry_weight && !isNaN(w) && w > patient.dry_weight) {
-            const uf = (w - patient.dry_weight) + 0.3; // + 300ml priming/wash-in
+            const uf = (w - patient.dry_weight) + 0.3;
             setTargetUF(uf.toFixed(1));
         } else {
             setTargetUF('');
@@ -201,7 +197,6 @@ export default function SesiHDWorkflowPage() {
                 updated_at: new Date().toISOString()
             }).eq('id', session.id);
 
-            // Perbarui otomatis BB Kering profil pasien
             await supabase.from('patients').update({
                 dry_weight: parseFloat(postWeight),
                 updated_at: new Date().toISOString()
@@ -221,7 +216,6 @@ export default function SesiHDWorkflowPage() {
 
     return (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden max-w-5xl mx-auto">
-            {/* Header Informasi Pasien */}
             <div
                 className="bg-teal-50 border-b border-teal-100 p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                 <div>
@@ -236,7 +230,6 @@ export default function SesiHDWorkflowPage() {
                 </span>
             </div>
 
-            {/* Navigasi Tab (Sekarang hanya 2 Fase) */}
             <div className="flex border-b border-gray-200 bg-gray-50">
                 {(['Pre', 'Post'] as const).map((tab) => (
                     <button
@@ -255,12 +248,9 @@ export default function SesiHDWorkflowPage() {
             </div>
 
             <div className="p-4 md:p-6">
-                {/* -------------------- TAB 1: PRE-HD -------------------- */}
                 {activeTab === 'Pre' && (
                     <form onSubmit={submitPreHD} className="space-y-6">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-
-                            {/* Card 1: Analisis Berat Badan */}
                             <div className="border border-blue-200 rounded-xl p-5 bg-blue-50/30">
                                 <h3 className="font-bold text-gray-700 mb-3 border-b border-blue-100 pb-2 flex items-center gap-2">
                                     Analisis Berat Badan
@@ -291,7 +281,6 @@ export default function SesiHDWorkflowPage() {
                                 </div>
                             </div>
 
-                            {/* Card 2: Penilaian Awal */}
                             <div className="border border-gray-200 rounded-xl p-5">
                                 <h3 className="font-bold text-gray-700 mb-3 border-b pb-2">Penilaian Awal</h3>
                                 <div className="grid grid-cols-2 gap-4">
@@ -332,7 +321,6 @@ export default function SesiHDWorkflowPage() {
                                 </div>
                             </div>
 
-                            {/* Card 3: Akses Vaskular */}
                             <div className="border border-gray-200 rounded-xl p-5 md:col-span-2">
                                 <h3 className="font-bold text-gray-700 mb-3 border-b pb-2">Akses Vaskular</h3>
                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -381,12 +369,9 @@ export default function SesiHDWorkflowPage() {
                     </form>
                 )}
 
-                {/* -------------------- TAB 2: POST-HD -------------------- */}
                 {activeTab === 'Post' && (
                     <form onSubmit={submitPostHD} className="space-y-6">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-
-                            {/* Card 1: Parameter Akhir */}
                             <div className="border border-gray-200 rounded-xl p-5">
                                 <h3 className="font-bold text-gray-700 mb-3 border-b pb-2">Parameter Akhir</h3>
                                 <div className="grid grid-cols-2 gap-4">
@@ -423,7 +408,6 @@ export default function SesiHDWorkflowPage() {
                                 </div>
                             </div>
 
-                            {/* Card 2: Tindakan Khusus & Obat */}
                             <div className="border border-gray-200 rounded-xl p-5">
                                 <h3 className="font-bold text-gray-700 mb-3 border-b pb-2">Tindakan Khusus & Obat</h3>
 
@@ -458,7 +442,6 @@ export default function SesiHDWorkflowPage() {
                             </div>
                         </div>
 
-                        {/* Pemberitahuan Sinkronisasi */}
                         <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl flex items-start gap-3">
                             <AlertCircle className="w-5 h-5 text-blue-500 shrink-0 mt-0.5"/>
                             <div className="text-sm text-blue-800">
@@ -484,5 +467,14 @@ export default function SesiHDWorkflowPage() {
                 )}
             </div>
         </div>
+    );
+}
+
+export default function SesiHDWorkflowPage() {
+    return (
+        <Suspense fallback={<div className="p-12 text-center flex justify-center text-teal-600"><Loader2
+            className="w-8 h-8 animate-spin"/></div>}>
+            <SesiHDWorkflowContent/>
+        </Suspense>
     );
 }
