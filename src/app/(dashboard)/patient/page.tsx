@@ -5,13 +5,17 @@ import Link from 'next/link';
 import {createClient} from '@/lib/supabase/client';
 import {evaluateFluidBalance, evaluateIDWG} from '@/lib/calculations';
 import {
+    Activity,
     AlertTriangle,
+    ArrowRight,
     Bot,
     CalendarDays,
     CheckCircle2,
     ChevronRight,
     Clock,
     Droplet,
+    History,
+    Pill,
     RefreshCw,
     Scale,
     Sparkles,
@@ -26,6 +30,9 @@ export default function PatientHomePage() {
     const [fluidStatus, setFluidStatus] = useState<any>(null);
     const [idwgStatus, setIdwgStatus] = useState<any>(null);
     const [adviceList, setAdviceList] = useState<any[]>([]);
+
+    // State baru untuk Riwayat HD
+    const [pastSessions, setPastSessions] = useState<any[]>([]);
 
     const loadDashboardData = useCallback(async () => {
         setLoading(true);
@@ -100,6 +107,20 @@ export default function PatientHomePage() {
             setAdviceList(advices.messages);
         }
 
+        // 6. Ambil Riwayat Sesi HD (3 Terakhir)
+        const {data: sessions, error} = await supabase
+            .from('hd_sessions')
+            .select('created_at, pre_hd, post_hd')
+            .eq('patient_id', patient.id)
+            .eq('status', 'Selesai')
+            .order('created_at', {ascending: false})
+
+        console.log(patient.id, sessions, error)
+
+        if (sessions) {
+            setPastSessions(sessions);
+        }
+
         setLoading(false);
     }, [supabase]);
 
@@ -171,8 +192,8 @@ export default function PatientHomePage() {
                                         : 'bg-green-100 text-green-700'
                             }`}
                         >
-              {idwgStatus ? `IDWG: ${idwgStatus.idwgPercent}%` : 'Belum isi hari ini'}
-            </span>
+                            {idwgStatus ? `IDWG: ${idwgStatus.idwgPercent}%` : 'Belum isi hari ini'}
+                        </span>
                     </div>
                     <div className="mt-3 flex items-center justify-between text-[11px] font-bold text-blue-600">
                         <span>Catat BB</span>
@@ -210,14 +231,72 @@ export default function PatientHomePage() {
                                         : 'bg-green-100 text-green-700'
                             }`}
                         >
-              {fluidStatus?.percentage || 0}% kuota
-            </span>
+                            {fluidStatus?.percentage || 0}% kuota
+                        </span>
                     </div>
                     <div className="mt-3 flex items-center justify-between text-[11px] font-bold text-blue-600">
                         <span>Catat Minum</span>
                         <ChevronRight className="w-3.5 h-3.5"/>
                     </div>
                 </Link>
+            </div>
+
+            {/* RIWAYAT HEMODIALISIS (Sesi Selesai) */}
+            <div className="bg-white rounded-3xl p-5 shadow-sm border border-teal-100 relative overflow-hidden">
+                <Activity className="absolute -right-6 top-0 w-32 h-32 text-teal-50 opacity-50 z-0" strokeWidth={1}/>
+                <div className="relative z-10">
+                    <div className="flex items-center gap-2 border-b border-teal-100 pb-3 mb-3">
+                        <History className="w-4 h-4 text-teal-800"/>
+                        <h3 className="font-bold text-xs uppercase tracking-wider text-teal-800">
+                            Riwayat Cuci Darah
+                        </h3>
+                    </div>
+
+                    <div className="space-y-3">
+                        {pastSessions.length === 0 ? (
+                            <p className="text-sm text-gray-500">Belum ada riwayat cuci darah tercatat.</p>
+                        ) : (
+                            pastSessions.map((s, idx) => (
+                                <div key={idx}
+                                     className="p-3.5 bg-white border border-gray-100 rounded-xl text-sm shadow-[0_2px_4px_rgba(0,0,0,0.02)]">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <span className="font-bold text-gray-800">
+                                            {new Date(s.created_at).toLocaleDateString('id-ID', {
+                                                day: 'numeric',
+                                                month: 'long',
+                                                year: 'numeric'
+                                            })}
+                                        </span>
+                                        <span
+                                            className="text-[10px] bg-teal-100 text-teal-800 px-2 py-0.5 rounded-full font-bold">
+                                            Ditarik: {s.post_hd?.uf || '-'} L
+                                        </span>
+                                    </div>
+                                    <div className="text-gray-600 text-[11px] flex justify-between items-center mt-1">
+                                        <span>BB Awal: <strong
+                                            className="text-gray-800">{s.pre_hd?.weight || '-'} kg</strong></span>
+                                        <ArrowRight className="w-3.5 h-3.5 text-gray-300"/>
+                                        <span>BB Pulang: <strong
+                                            className="text-gray-800">{s.post_hd?.weight || '-'} kg</strong></span>
+                                    </div>
+
+                                    {/* Jika ada catatan obat/tindakan khusus di sesi Post-HD */}
+                                    {s.post_hd?.medication && (
+                                        <div
+                                            className="mt-3 p-2 bg-blue-50 border border-blue-100 rounded-lg flex items-start gap-2">
+                                            <Pill className="w-3.5 h-3.5 text-blue-500 mt-0.5 shrink-0"/>
+                                            <p className="text-[11px] text-blue-800">
+                                                <span
+                                                    className="font-semibold block mb-0.5">Obat Masuk / Tambahan:</span>
+                                                {s.post_hd.medication}
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
             </div>
 
             {/* KARTU SMART ADVICE (SARAN MEDIS & PERINGATAN KLINIS) */}

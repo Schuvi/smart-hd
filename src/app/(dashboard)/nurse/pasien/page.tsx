@@ -16,6 +16,8 @@ import {
     Users,
     X,
 } from 'lucide-react';
+import {createPatientAuth, updatePatientAuth} from "@/app/actions/auth";
+import {updatePatientData} from "@/app/actions/patient";
 
 interface Patient {
     id: string;
@@ -41,16 +43,18 @@ export default function NursePasienPage() {
     const [submitting, setSubmitting] = useState(false);
     const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
-    // Form State Pasien
+    // Form State Pasien terintegrasi dengan Akun
     const [formData, setFormData] = useState({
         rm: '',
         name: '',
         dry_weight: '',
         fluid_limit: '1000',
         schedule_pattern: '',
+        username: '',
+        password: '',
     });
 
-    // Form State Akun Pasien
+    // Form State untuk Reset Akun Pasien
     const [accountData, setAccountData] = useState({
         username: '',
         password: '',
@@ -78,7 +82,6 @@ export default function NursePasienPage() {
         loadPatients();
     }, [loadPatients]);
 
-    // Buka Modal Tambah/Edit Pasien
     const handleOpenPatientModal = (patient?: Patient) => {
         if (patient) {
             setSelectedPatient(patient);
@@ -88,6 +91,8 @@ export default function NursePasienPage() {
                 dry_weight: patient.dry_weight.toString(),
                 fluid_limit: patient.fluid_limit.toString(),
                 schedule_pattern: patient.schedule_pattern || '',
+                username: '',
+                password: '',
             });
         } else {
             setSelectedPatient(null);
@@ -97,12 +102,13 @@ export default function NursePasienPage() {
                 dry_weight: '',
                 fluid_limit: '1000',
                 schedule_pattern: '',
+                username: '',
+                password: '',
             });
         }
         setPatientModalOpen(true);
     };
 
-    // Simpan Data Pasien (Insert / Update)
     const handleSavePatient = async (e: React.FormEvent) => {
         e.preventDefault();
         setSubmitting(true);
@@ -117,35 +123,48 @@ export default function NursePasienPage() {
         };
 
         if (selectedPatient) {
-            const {error} = await supabase
-                .from('patients')
-                .update(payload)
-                .eq('id', selectedPatient.id);
+            const result = await updatePatientData(selectedPatient.id, payload);
 
-            if (error) {
-                showToast(`Gagal memperbarui: ${error.message}`, 'error');
+            if (!result.success) {
+                showToast(`Gagal memperbarui: ${result.error}`, 'error');
             } else {
-                showToast('Profil pasien berhasil diperbarui');
+                showToast('Profil pasien & akun berhasil diperbarui');
                 setPatientModalOpen(false);
                 loadPatients();
             }
         } else {
-            const {error} = await supabase
-                .from('patients')
-                .insert([payload]);
+            try {
+                // 1. Insert ke tabel patients
+                const {data: newPatient, error: patientError} = await supabase
+                    .from('patients')
+                    .insert([payload])
+                    .select()
+                    .single();
 
-            if (error) {
-                showToast(`Gagal menambahkan pasien: ${error.message}`, 'error');
-            } else {
-                showToast('Pasien baru berhasil didaftarkan');
+                if (patientError) throw new Error(`Gagal menyimpan data medis: ${patientError.message}`);
+
+                // 2. Buat akun pasien melalui Server Action (Mencegah auto-login & menembus RLS)
+                const email = `${formData.username.trim().toLowerCase()}@smarthd.com`;
+                const authResult = await createPatientAuth(
+                    email,
+                    formData.password,
+                    payload.name,
+                    newPatient.id
+                );
+
+                if (!authResult.success) {
+                    throw new Error(`Pasien tersimpan, namun gagal membuat akun login: ${authResult.error}`);
+                }
+
+                showToast('Pasien baru beserta akun dan profil berhasil didaftarkan');
                 setPatientModalOpen(false);
                 loadPatients();
+            } catch (err: any) {
+                showToast(err.message, 'error');
             }
         }
         setSubmitting(false);
     };
-
-    // Buka Modal Pembuatan Akun
     const handleOpenAccountModal = (patient: Patient) => {
         setSelectedPatient(patient);
         setAccountData({
@@ -155,50 +174,26 @@ export default function NursePasienPage() {
         setAccountModalOpen(true);
     };
 
-    // Simpan Akun Login Pasien via Supabase Auth
     const handleSaveAccount = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!selectedPatient) return;
         setSubmitting(true);
 
         try {
-            const email = `${accountData.username.trim().toLowerCase()}@smarthd.local`;
-
-            // Panggil endpoint / API route Supabase SignUp
-            const {data, error} = await supabase.auth.signUp({
-                email,
-                password: accountData.password,
-                options: {
-                    data: {
-                        name: selectedPatient.name,
-                        role: 'patient',
-                        patient_id: selectedPatient.id,
-                    },
-                },
-            });
+            const {error} = await updatePatientAuth(selectedPatient.id, accountData.password, accountData.username)
 
             if (error) throw error;
 
-            // Buat / tautkan profil pengguna di public.profiles
-            if (data.user) {
-                await supabase.from('profiles').upsert({
-                    id: data.user.id,
-                    name: selectedPatient.name,
-                    role: 'patient',
-                    patient_id: selectedPatient.id,
-                });
-            }
-
-            showToast(`Akun pasien ${selectedPatient.name} berhasil dibuat`);
+            showToast(`Akun pasien ${selectedPatient.name} berhasil diperbarui`);
             setAccountModalOpen(false);
         } catch (err: any) {
+            console.log(err)
             showToast(err.message || 'Gagal membuat akun pasien', 'error');
         } finally {
             setSubmitting(false);
         }
     };
 
-    // Filter pencarian
     const filteredPatients = patients.filter(
         (p) =>
             p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -222,24 +217,24 @@ export default function NursePasienPage() {
 
             {/* Header & Filter Bar */}
             <div
-                className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                className="bg-white p-5 rounded-2xl shadow-sm border border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
-                    <h1 className="text-xl font-black text-gray-900 flex items-center gap-2">
+                    <h1 className="text-xl font-black text-black flex items-center gap-2">
                         <Users className="w-6 h-6 text-teal-600"/> Master Data Pasien
                     </h1>
-                    <p className="text-xs text-gray-500 mt-0.5">Kelola informasi klinis, jadwal rutin, dan akses
-                        pasien</p>
+                    <p className="text-xs text-black font-medium mt-0.5">Kelola informasi klinis, jadwal rutin, dan
+                        akses pasien</p>
                 </div>
 
                 <div className="flex items-center gap-3">
                     <div className="relative flex-1 sm:w-64">
-                        <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400"/>
+                        <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-black"/>
                         <input
                             type="text"
                             placeholder="Cari nama atau No. RM..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-teal-500 focus:bg-white transition"
+                            className="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-300 rounded-xl text-xs text-black font-semibold outline-none focus:ring-2 focus:ring-teal-500 focus:bg-white transition"
                         />
                     </div>
 
@@ -253,22 +248,22 @@ export default function NursePasienPage() {
                 </div>
             </div>
 
-            {/* Tabel Pasien (Responsive Desktop & Mobile Card) */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            {/* Tabel Pasien */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
                 {loading ? (
                     <div className="p-12 flex flex-col items-center justify-center text-teal-600 gap-2">
                         <Loader2 className="w-8 h-8 animate-spin"/>
-                        <span className="text-xs font-semibold">Memuat daftar pasien...</span>
+                        <span className="text-xs font-bold text-black">Memuat daftar pasien...</span>
                     </div>
                 ) : filteredPatients.length === 0 ? (
-                    <div className="p-12 text-center text-gray-400 text-xs">
+                    <div className="p-12 text-center font-bold text-black text-sm">
                         Tidak ditemukan data pasien yang sesuai dengan kata kunci.
                     </div>
                 ) : (
                     <div className="overflow-x-auto">
                         <table className="w-full text-left border-collapse">
                             <thead>
-                            <tr className="bg-gray-50/80 text-[11px] font-bold text-gray-500 uppercase border-b border-gray-100">
+                            <tr className="bg-gray-100 text-xs font-extrabold text-black uppercase border-b border-gray-300">
                                 <th className="py-3.5 px-5">No. RM</th>
                                 <th className="py-3.5 px-4">Nama Pasien</th>
                                 <th className="py-3.5 px-4">Jadwal Rutin</th>
@@ -277,41 +272,42 @@ export default function NursePasienPage() {
                                 <th className="py-3.5 px-5 text-right">Aksi</th>
                             </tr>
                             </thead>
-                            <tbody className="divide-y divide-gray-100 text-xs">
+                            <tbody className="divide-y divide-gray-200 text-xs">
                             {filteredPatients.map((p) => (
-                                <tr key={p.id} className="hover:bg-gray-50/60 transition">
-                                    <td className="py-3.5 px-5 font-mono font-bold text-teal-700">{p.rm}</td>
-                                    <td className="py-3.5 px-4 font-bold text-gray-900">{p.name}</td>
-                                    <td className="py-3.5 px-4 text-gray-600">
-                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-gray-100 rounded-md text-[11px]">
-                        <Calendar className="w-3 h-3 text-gray-500"/>
-                          {p.schedule_pattern || 'Belum diatur'}
-                      </span>
+                                <tr key={p.id} className="hover:bg-gray-50 transition">
+                                    <td className="py-3.5 px-5 font-mono font-extrabold text-teal-800">{p.rm}</td>
+                                    <td className="py-3.5 px-4 font-bold text-black">{p.name}</td>
+                                    <td className="py-3.5 px-4 text-black font-semibold">
+                                            <span
+                                                className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-gray-200 border border-gray-300 rounded-md text-[11px] font-bold">
+                                                <Calendar className="w-3 h-3 text-black"/>
+                                                {p.schedule_pattern || 'Belum diatur'}
+                                            </span>
                                     </td>
-                                    <td className="py-3.5 px-4 font-semibold text-gray-700">
-                      <span className="inline-flex items-center gap-1">
-                        <Scale className="w-3.5 h-3.5 text-blue-500"/>
-                          {p.dry_weight} kg
-                      </span>
+                                    <td className="py-3.5 px-4 font-bold text-black">
+                                            <span className="inline-flex items-center gap-1">
+                                                <Scale className="w-3.5 h-3.5 text-blue-600"/>
+                                                {p.dry_weight} kg
+                                            </span>
                                     </td>
-                                    <td className="py-3.5 px-4 font-semibold text-gray-700">
-                      <span className="inline-flex items-center gap-1">
-                        <Droplets className="w-3.5 h-3.5 text-teal-500"/>
-                          {p.fluid_limit} mL
-                      </span>
+                                    <td className="py-3.5 px-4 font-bold text-black">
+                                            <span className="inline-flex items-center gap-1">
+                                                <Droplets className="w-3.5 h-3.5 text-teal-600"/>
+                                                {p.fluid_limit} mL
+                                            </span>
                                     </td>
                                     <td className="py-3.5 px-5 text-right space-x-2">
                                         <button
                                             onClick={() => handleOpenPatientModal(p)}
-                                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                                            className="p-1.5 text-blue-700 hover:bg-blue-100 rounded-lg transition"
                                             title="Edit Profil"
                                         >
                                             <Edit2 className="w-4 h-4"/>
                                         </button>
                                         <button
                                             onClick={() => handleOpenAccountModal(p)}
-                                            className="p-1.5 text-teal-600 hover:bg-teal-50 rounded-lg transition"
-                                            title="Atur Akun Login"
+                                            className="p-1.5 text-teal-700 hover:bg-teal-100 rounded-lg transition"
+                                            title="Atur Ulang Sandi/Akun"
                                         >
                                             <KeyRound className="w-4 h-4"/>
                                         </button>
@@ -335,27 +331,38 @@ export default function NursePasienPage() {
                                 {selectedPatient ? 'Edit Data Pasien' : 'Pendaftaran Pasien Baru'}
                             </h3>
                             <button onClick={() => setPatientModalOpen(false)}
-                                    className="text-teal-200 hover:text-white">
+                                    className="text-teal-100 hover:text-white">
                                 <X className="w-5 h-5"/>
                             </button>
                         </div>
 
                         <form onSubmit={handleSavePatient} className="p-6 space-y-4">
                             <div>
-                                <label className="block text-xs font-semibold text-gray-700 mb-1">No. Rekam Medis
+                                <label className="block text-xs font-extrabold text-black mb-1">No. Rekam Medis
                                     (RM)</label>
                                 <input
                                     type="text"
                                     required
                                     placeholder="Contoh: RM-001"
                                     value={formData.rm}
-                                    onChange={(e) => setFormData({...formData, rm: e.target.value})}
-                                    className="w-full px-3.5 py-2.5 bg-gray-50 border rounded-xl text-xs outline-none focus:ring-2 focus:ring-teal-500 font-mono"
+                                    onChange={(e) => {
+                                        const val = e.target.value;
+                                        if (!selectedPatient) {
+                                            setFormData({
+                                                ...formData,
+                                                rm: val,
+                                                username: val.toLowerCase().replace(/[^a-z0-9]/g, '')
+                                            });
+                                        } else {
+                                            setFormData({...formData, rm: val});
+                                        }
+                                    }}
+                                    className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-xs text-black outline-none focus:ring-2 focus:ring-teal-500 font-mono font-bold"
                                 />
                             </div>
 
                             <div>
-                                <label className="block text-xs font-semibold text-gray-700 mb-1">Nama Lengkap
+                                <label className="block text-xs font-extrabold text-black mb-1">Nama Lengkap
                                     Pasien</label>
                                 <input
                                     type="text"
@@ -363,13 +370,13 @@ export default function NursePasienPage() {
                                     placeholder="Contoh: Bpk. Budi Santoso"
                                     value={formData.name}
                                     onChange={(e) => setFormData({...formData, name: e.target.value})}
-                                    className="w-full px-3.5 py-2.5 bg-gray-50 border rounded-xl text-xs outline-none focus:ring-2 focus:ring-teal-500"
+                                    className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-xs text-black font-semibold outline-none focus:ring-2 focus:ring-teal-500"
                                 />
                             </div>
 
                             <div className="grid grid-cols-2 gap-3">
                                 <div>
-                                    <label className="block text-xs font-semibold text-gray-700 mb-1">BB Kering
+                                    <label className="block text-xs font-extrabold text-black mb-1">BB Kering
                                         (kg)</label>
                                     <input
                                         type="number"
@@ -378,11 +385,11 @@ export default function NursePasienPage() {
                                         placeholder="60.0"
                                         value={formData.dry_weight}
                                         onChange={(e) => setFormData({...formData, dry_weight: e.target.value})}
-                                        className="w-full px-3.5 py-2.5 bg-gray-50 border rounded-xl text-xs outline-none focus:ring-2 focus:ring-teal-500"
+                                        className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-xs text-black font-semibold outline-none focus:ring-2 focus:ring-teal-500"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-semibold text-gray-700 mb-1">Batas Cairan
+                                    <label className="block text-xs font-extrabold text-black mb-1">Batas Cairan
                                         (mL)</label>
                                     <input
                                         type="number"
@@ -390,28 +397,63 @@ export default function NursePasienPage() {
                                         placeholder="1000"
                                         value={formData.fluid_limit}
                                         onChange={(e) => setFormData({...formData, fluid_limit: e.target.value})}
-                                        className="w-full px-3.5 py-2.5 bg-gray-50 border rounded-xl text-xs outline-none focus:ring-2 focus:ring-teal-500"
+                                        className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-xs text-black font-semibold outline-none focus:ring-2 focus:ring-teal-500"
                                     />
                                 </div>
                             </div>
 
                             <div>
-                                <label className="block text-xs font-semibold text-gray-700 mb-1">Pola Jadwal
+                                <label className="block text-xs font-extrabold text-black mb-1">Pola Jadwal
                                     Rutin</label>
                                 <input
                                     type="text"
                                     placeholder="Contoh: Selasa - Jumat"
                                     value={formData.schedule_pattern}
                                     onChange={(e) => setFormData({...formData, schedule_pattern: e.target.value})}
-                                    className="w-full px-3.5 py-2.5 bg-gray-50 border rounded-xl text-xs outline-none focus:ring-2 focus:ring-teal-500"
+                                    className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-xs text-black font-semibold outline-none focus:ring-2 focus:ring-teal-500"
                                 />
                             </div>
 
-                            <div className="pt-3 flex justify-end gap-2 border-t">
+                            {!selectedPatient && (
+                                <div className="pt-3 mt-3 border-t border-gray-300">
+                                    <h4 className="text-xs font-extrabold text-teal-800 mb-3 flex items-center gap-2">
+                                        <KeyRound className="w-4 h-4"/> Pengaturan Akses Login Mandiri Pasien
+                                    </h4>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-xs font-extrabold text-black mb-1">Username
+                                                Login</label>
+                                            <input
+                                                type="text"
+                                                required
+                                                placeholder="Sesuai RM"
+                                                value={formData.username}
+                                                onChange={(e) => setFormData({...formData, username: e.target.value})}
+                                                className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-xs text-black font-mono font-bold outline-none focus:ring-2 focus:ring-teal-500"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-extrabold text-black mb-1">Kata
+                                                Sandi</label>
+                                            <input
+                                                type="password"
+                                                required
+                                                minLength={6}
+                                                placeholder="Minimal 6 huruf/angka"
+                                                value={formData.password}
+                                                onChange={(e) => setFormData({...formData, password: e.target.value})}
+                                                className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-xs text-black font-semibold outline-none focus:ring-2 focus:ring-teal-500"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="pt-3 flex justify-end gap-2 border-t border-gray-300">
                                 <button
                                     type="button"
                                     onClick={() => setPatientModalOpen(false)}
-                                    className="px-4 py-2 border rounded-xl text-xs font-semibold text-gray-600 hover:bg-gray-50"
+                                    className="px-4 py-2 border border-gray-400 rounded-xl text-xs font-extrabold text-black hover:bg-gray-100"
                                 >
                                     Batal
                                 </button>
@@ -421,7 +463,7 @@ export default function NursePasienPage() {
                                     className="px-5 py-2 bg-teal-600 text-white rounded-xl text-xs font-bold hover:bg-teal-700 transition flex items-center gap-1.5"
                                 >
                                     {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin"/>}
-                                    <span>Simpan Profil</span>
+                                    <span>{selectedPatient ? 'Simpan Profil' : 'Daftar & Buat Akun'}</span>
                                 </button>
                             </div>
                         </form>
@@ -429,7 +471,7 @@ export default function NursePasienPage() {
                 </div>
             )}
 
-            {/* MODAL 2: ATUR AKUN LOGIN PASIEN */}
+            {/* MODAL 2: ATUR AKUN LOGIN PASIEN LAMA */}
             {accountModalOpen && selectedPatient && (
                 <div
                     className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
@@ -445,24 +487,26 @@ export default function NursePasienPage() {
                         </div>
 
                         <form onSubmit={handleSaveAccount} className="p-6 space-y-4">
-                            <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs text-blue-800">
-                                Atur username & kata sandi pasien untuk <strong>{selectedPatient.name}</strong>.
+                            <div
+                                className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs font-bold text-blue-900">
+                                Atur atau reset username & kata sandi pasien
+                                untuk <strong>{selectedPatient.name}</strong>.
                             </div>
 
                             <div>
-                                <label className="block text-xs font-semibold text-gray-700 mb-1">Username / ID
+                                <label className="block text-xs font-extrabold text-black mb-1">Username / ID
                                     Pasien</label>
                                 <input
                                     type="text"
                                     required
                                     value={accountData.username}
                                     onChange={(e) => setAccountData({...accountData, username: e.target.value})}
-                                    className="w-full px-3.5 py-2.5 bg-gray-50 border rounded-xl text-xs outline-none focus:ring-2 focus:ring-teal-500 font-mono"
+                                    className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-xs text-black font-mono font-bold outline-none focus:ring-2 focus:ring-teal-500"
                                 />
                             </div>
 
                             <div>
-                                <label className="block text-xs font-semibold text-gray-700 mb-1">Kata Sandi
+                                <label className="block text-xs font-extrabold text-black mb-1">Kata Sandi Baru
                                     Pasien</label>
                                 <input
                                     type="password"
@@ -471,15 +515,15 @@ export default function NursePasienPage() {
                                     placeholder="Minimal 6 karakter"
                                     value={accountData.password}
                                     onChange={(e) => setAccountData({...accountData, password: e.target.value})}
-                                    className="w-full px-3.5 py-2.5 bg-gray-50 border rounded-xl text-xs outline-none focus:ring-2 focus:ring-teal-500"
+                                    className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-xs text-black font-semibold outline-none focus:ring-2 focus:ring-teal-500"
                                 />
                             </div>
 
-                            <div className="pt-3 flex justify-end gap-2 border-t">
+                            <div className="pt-3 flex justify-end gap-2 border-t border-gray-300">
                                 <button
                                     type="button"
                                     onClick={() => setAccountModalOpen(false)}
-                                    className="px-4 py-2 border rounded-xl text-xs font-semibold text-gray-600 hover:bg-gray-50"
+                                    className="px-4 py-2 border border-gray-400 rounded-xl text-xs font-extrabold text-black hover:bg-gray-100"
                                 >
                                     Batal
                                 </button>
@@ -489,7 +533,7 @@ export default function NursePasienPage() {
                                     className="px-5 py-2 bg-teal-600 text-white rounded-xl text-xs font-bold hover:bg-teal-700 transition flex items-center gap-1.5"
                                 >
                                     {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin"/>}
-                                    <span>Simpan Akun</span>
+                                    <span>Simpan Akun Baru</span>
                                 </button>
                             </div>
                         </form>
